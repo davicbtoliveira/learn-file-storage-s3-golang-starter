@@ -67,7 +67,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch media type", err)
 		return
 	}
-	if mediaType != "image/jpeg" || mediaType != "image/png" {
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
 		respondWithError(w, http.StatusBadRequest, "Image format differs from jpeg or png", err)
 		return
 	}
