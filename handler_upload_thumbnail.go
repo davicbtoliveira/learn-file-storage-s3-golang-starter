@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -37,17 +39,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "COundn't fetch thumbnail from header", err)
+		respondWithError(w, http.StatusBadRequest, "Couldn't fetch thumbnail from header", err)
 		return
 	}
 	defer file.Close()
 
 	fileType := header.Header.Get("Content-Type")
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Error when reading image data", err)
-		return
-	}
 
 	videoMetadata, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -60,15 +57,27 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	thumbInfos := thumbnail{
-		data:      imageData,
-		mediaType: fileType,
+	if err := cfg.ensureAssetsDir(); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error to ensure assets dir", err)
+		return
+	}
+	contentType := strings.Split(fileType, "/")
+	fileName := fmt.Sprintf("%v.%v", videoIDString, contentType[1])
+	savePath := filepath.Join(cfg.assetsRoot, fileName)
+	createFile, err := os.Create(savePath)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error when creating file", err)
+		return
+	}
+	defer createFile.Close()
+
+	if _, err := io.Copy(createFile, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error copying file", err)
+		return
 	}
 
-	encData := base64.StdEncoding.EncodeToString(thumbInfos.data)
-	dataURL := fmt.Sprintf("data:%v/plain;base64,%v", thumbInfos.mediaType, encData)
-
-	videoMetadata.ThumbnailURL = &dataURL
+	newURL := fmt.Sprintf("http://localhost:%v/assets/%v", cfg.port, fileName)
+	videoMetadata.ThumbnailURL = &newURL
 	cfg.db.UpdateVideo(videoMetadata)
 
 	respondWithJSON(w, http.StatusOK, videoMetadata)
