@@ -1,18 +1,67 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+func getAspectRatio(filePath string) (string, error) {
+	type Dimensions struct {
+		Width int `json:"width"`
+		Height int `json:"height"`
+	}
+
+	type ffprobeResults struct {
+		Streams []Dimensions `json:"streams"`
+	}
+
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var buffer bytes.Buffer
+	cmd.Stdout = &buffer
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	var result ffprobeResults
+	if err := json.Unmarshal(buffer.Bytes(), &result); err != nil {
+		return "", err
+	}
+
+	if len(result.Streams) == 0 {
+		return "", fmt.Errorf("No video streams found in the output")
+	}
+
+	videoStream := result.Streams[0]
+	ar := arName(videoStream.Width, videoStream.Height)
+
+	return ar, nil
+}
+
+func arName(w, h int) string {
+	ratio := float64(w) / float64(h)
+    const epsilon = 0.05
+
+    if math.Abs(ratio - 16.0/9.0) <= epsilon {
+        return "landscape"
+    }
+    if math.Abs(ratio - 9.0/16.0) <= epsilon {
+        return "portrait"
+    }
+    return "other"
+}
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	const maxMemory = 1 << 30
@@ -77,7 +126,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	rawURLEncoding := base64.RawURLEncoding
 	videoHash := rawURLEncoding.EncodeToString(key)
 
-	s3Key := fmt.Sprintf("%v.mp4", videoHash)
+	ar, err := getAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error when fetching video aspect ratio", err)
+		return
+	}
+
+	s3Key := fmt.Sprintf("%v/%v.mp4", ar, videoHash)
 	cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &s3Key,
