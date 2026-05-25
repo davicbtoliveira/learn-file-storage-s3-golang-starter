@@ -119,14 +119,32 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer tmpFile.Close()
 
 	io.Copy(tmpFile, file)
-	tmpFile.Seek(0, io.SeekStart)
+
+	outputPath, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error when processing video", err)
+		return
+	}
+
+	processedVideo, err := os.Open(outputPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error when processing video", err)
+		return
+	}
+	defer os.Remove(processedVideo.Name())
+	defer processedVideo.Close()
+
+	if _, err := processedVideo.Seek(0, io.SeekStart); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error when processing video", err)
+		return
+	}
 
 	key := make([]byte, 32)
 	rand.Read(key)
 	rawURLEncoding := base64.RawURLEncoding
 	videoHash := rawURLEncoding.EncodeToString(key)
 
-	ar, err := getAspectRatio(tmpFile.Name())
+	ar, err := getAspectRatio(processedVideo.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error when fetching video aspect ratio", err)
 		return
@@ -136,7 +154,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &s3Key,
-		Body:        tmpFile,
+		Body:        processedVideo,
 		ContentType: &mimeType,
 	})
 
